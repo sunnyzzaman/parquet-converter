@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Parquet → CSV Converter — file:// friendly</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #f3f4f6; }
+    .terminal {
+      background: linear-gradient(180deg,#071020,#05101a);
+      color: #cbd5e1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;
+      font-size: 13px;
+      padding: 12px;
+      border-radius: 8px;
+      overflow: auto;
+      max-height: 380px;
+    }
+    .log-info { color: #7dd3fc; }
+    .log-error { color: #ff7675; }
+    .log-success { color: #86efac; }
+  </style>
+</head>
+<body class="p-6">
+  <main class="max-w-4xl mx-auto bg-white rounded-xl shadow p-6">
+    <header class="flex items-center justify-between mb-4">
+      <h1 class="text-2xl font-semibold">Parquet → CSV Converter</h1>
+      <div class="text-sm text-gray-500">Runs locally. Uses DuckDB-Wasm.</div>
+    </header>
+
+    <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">Drop a .parquet file (or click)</label>
+        <div id="dropzone" class="border-2 border-dashed p-4 rounded text-center cursor-pointer hover:border-blue-400 transition-colors">
+          <input id="fileInput" type="file" accept=".parquet" class="hidden" />
+          <div class="text-gray-600">Drag & drop a file here, or click to browse</div>
+          <div id="fileName" class="mt-2 text-xs text-gray-500 truncate"></div>
+        </div>
+
+        <div class="flex gap-2 mt-3">
+          <button id="startBtn" class="flex-1 bg-blue-600 text-white py-2 rounded disabled:opacity-60 transition-opacity" disabled>Start</button>
+          <button id="cancelBtn" class="flex-1 bg-red-600 text-white py-2 rounded disabled:opacity-60 transition-opacity" disabled>Cancel</button>
+          <button id="downloadBtn" class="flex-1 bg-green-600 text-white py-2 rounded disabled:opacity-60 hidden transition-opacity">Download CSV</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="bg-gray-50 rounded p-3 h-full border border-gray-100">
+          <div class="text-sm font-medium text-gray-700 mb-2">Progress</div>
+          <div class="text-xs text-gray-500 mb-1">Rows processed: <span id="rowsProcessed" class="font-mono text-gray-900">0</span></div>
+          <div class="text-xs text-gray-500">Total records: <span id="recordsSize" class="font-mono text-gray-900">0</span></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-sm font-medium text-gray-700">Process Log</div>
+          <button id="clearLog" class="text-xs text-gray-500 hover:text-gray-800">Clear</button>
+        </div>
+        <div id="log" class="terminal" role="log" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section id="previewSection" class="mt-6 hidden">
+      <div class="flex justify-between items-end mb-2">
+        <div class="text-sm font-medium text-gray-700">Data Preview</div>
+        <div class="flex items-center gap-4 bg-gray-50 px-3 py-1.5 rounded border border-gray-200">
+          <div>
+            <span class="text-xs text-gray-600">Rows per page:</span>
+            <select id="pageSize" class="ml-1 border-gray-300 rounded text-xs py-0.5">
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="500">500</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="prevPage" class="px-2 py-0.5 bg-gray-200 hover:bg-gray-300 rounded text-xs disabled:opacity-50 transition-colors">Previous</button>
+            <span id="pageInfo" class="text-xs text-gray-600 font-mono">Page 1</span>
+            <button id="nextPage" class="px-2 py-0.5 bg-gray-200 hover:bg-gray-300 rounded text-xs disabled:opacity-50 transition-colors">Next</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="overflow-x-auto max-h-[500px] border border-gray-200 rounded bg-white shadow-inner">
+        <table class="min-w-full text-xs text-left whitespace-nowrap">
+          <thead class="bg-gray-100 sticky top-0 shadow-sm border-b border-gray-200" id="previewHead"></thead>
+          <tbody class="divide-y divide-gray-100" id="previewBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <script type="module">
+  const $ = s => document.querySelector(s);
+  const logEl = $('#log');
+  const startBtn = $('#startBtn');
+  const cancelBtn = $('#cancelBtn');
+  const downloadBtn = $('#downloadBtn');
+  const fileInput = $('#fileInput');
+  const dropzone = $('#dropzone');
+  const fileNameEl = $('#fileName');
+  const rowsProcessedEl = $('#rowsProcessed');
+  const recordsSizeEl = $('#recordsSize');
+  const clearLogBtn = $('#clearLog');
+  
+  const previewSection = $('#previewSection');
+  const previewHead = $('#previewHead');
+  const previewBody = $('#previewBody');
+  const pageSizeSelect = $('#pageSize');
+  const prevPageBtn = $('#prevPage');
+  const nextPageBtn = $('#nextPage');
+  const pageInfoEl = $('#pageInfo');
+
+  let selectedFile = null;
+  let currentDownloadUrl = null;
+  
+  // Pagination State
+  let globalRows = [];
+  let globalHeaders = [];
+  let currentPage = 1;
+  let rowsPerPage = 50;
+
+  function log(msg, cls = 'log-info') {
+    const time = new Date().toLocaleTimeString();
+    const div = document.createElement('div');
+    div.className = cls;
+    div.textContent = `[${time}] ${msg}`;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  clearLogBtn.addEventListener('click', () => logEl.innerHTML = '');
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('border-blue-400'); });
+  dropzone.addEventListener('dragleave', e => { dropzone.classList.remove('border-blue-400'); });
+
+  fileInput.addEventListener('change', (e) => {
+    const fl = e.target && e.target.files && e.target.files.length ? e.target.files : null;
+    if (!fl) return;
+    handleFileList(fl);
+  });
+  
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('border-blue-400');
+    const fl = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length ? e.dataTransfer.files : null;
+    if (!fl) return;
+    handleFileList(fl);
+  });
+
+  function handleFileList(fileList) {
+    const file = fileList[0];
+    selectedFile = file;
+    fileNameEl.textContent = `${file.name} — ${humanFileSize(file.size)}`;
+    startBtn.disabled = false;
+    cancelBtn.disabled = true;
+    downloadBtn.classList.add('hidden');
+    previewSection.classList.add('hidden');
+    log(`Selected file: ${file.name} (${humanFileSize(file.size)})`, 'log-info');
+  }
+
+  function humanFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    const sizes = ['B','KB','MB','GB','TB'];
+    return (bytes / Math.pow(1024, i)).toFixed(i===0?0:2) + ' ' + sizes[i];
+  }
+
+  function csvEscape(val) {
+    if (val === null || val === undefined) return '';
+    if (val instanceof Date) return val.toISOString();
+    if (typeof val === 'object') {
+      try { val = JSON.stringify(val); } catch (e) { val = String(val); }
+    }
+    const s = String(val);
+    if (s.indexOf('"') !== -1) return `"${s.replace(/"/g, '""')}"`;
+    if (s.indexOf(',') !== -1 || s.indexOf('\n') !== -1 || s.indexOf('\r') !== -1) return `"${s}"`;
+    return s;
+  }
+
+  function extractRowsFromResult(res) {
+    if (!res) return [];
+    if (typeof res.toArray === 'function') {
+      try { return res.toArray(); } catch (e) {}
+    }
+    if (Array.isArray(res)) return res;
+    try { return Array.from(res); } catch (e) { return []; }
+  }
+
+  // --- Pagination & Rendering Logic ---
+  function updatePaginationUI() {
+    const totalPages = Math.ceil(globalRows.length / rowsPerPage) || 1;
+    pageInfoEl.textContent = `Page ${currentPage} of ${totalPages}`;
+    prevPageBtn.disabled = currentPage === 1;
+    nextPageBtn.disabled = currentPage === totalPages;
+  }
+
+  function renderPreview() {
+    previewHead.innerHTML = '';
+    previewBody.innerHTML = '';
+
+    // Render Headers
+    const trHead = document.createElement('tr');
+    globalHeaders.forEach(h => {
+      const th = document.createElement('th');
+      th.className = 'px-3 py-2 font-semibold text-gray-700 border-r last:border-r-0';
+      th.textContent = h;
+      trHead.appendChild(th);
+    });
+    previewHead.appendChild(trHead);
+
+    // Calculate Slice
+    const startIdx = (currentPage - 1) * rowsPerPage;
+    const endIdx = Math.min(startIdx + rowsPerPage, globalRows.length);
+
+    // Render Body Rows
+    for (let i = startIdx; i < endIdx; i++) {
+      const r = globalRows[i];
+      const cells = Array.isArray(r) ? r : globalHeaders.map(h => r[h]);
+      const trBody = document.createElement('tr');
+
+      cells.forEach((c, colIdx) => {
+        let val = c;
+        if (typeof val === 'number' || typeof val === 'bigint') {
+          const colName = globalHeaders[colIdx] ? globalHeaders[colIdx].toLowerCase() : '';
+          if (colName.includes('date') || colName.includes('time')) {
+            if (val > 1000000000000) {
+              val = new Date(Number(val)).toISOString().split('T')[0]; 
+            }
+          }
+        }
+        
+        const td = document.createElement('td');
+        td.className = 'px-3 py-1.5 border-r last:border-r-0 text-gray-800';
+        td.textContent = val !== null && val !== undefined ? String(val) : '';
+        trBody.appendChild(td);
+      });
+      previewBody.appendChild(trBody);
+    }
+    updatePaginationUI();
+  }
+
+  // Pagination Event Listeners
+  pageSizeSelect.addEventListener('change', (e) => {
+    rowsPerPage = parseInt(e.target.value, 10);
+    currentPage = 1;
+    renderPreview();
+  });
+
+  prevPageBtn.addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage--;
+      renderPreview();
+    }
+  });
+
+  nextPageBtn.addEventListener('click', () => {
+    const totalPages = Math.ceil(globalRows.length / rowsPerPage);
+    if (currentPage < totalPages) {
+      currentPage++;
+      renderPreview();
+    }
+  });
+
+
+  startBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    
+    startBtn.disabled = true;
+    cancelBtn.disabled = false;
+    downloadBtn.classList.add('hidden');
+    previewSection.classList.add('hidden');
+    rowsProcessedEl.textContent = '0';
+    recordsSizeEl.textContent = '0';
+    if (currentDownloadUrl) URL.revokeObjectURL(currentDownloadUrl);
+
+    try {
+      log('Loading duckdb-wasm...', 'log-info');
+      const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm/+esm');
+      const bundles = duckdb.getJsDelivrBundles();
+      const bundle = await duckdb.selectBundle(bundles);
+      
+      const logger = new duckdb.ConsoleLogger();
+      log('Creating worker and instantiating DuckDB...', 'log-info');
+      
+      const bootstrap = `importScripts("${bundle.mainWorker}");`;
+      const workerBlob = new Blob([bootstrap], { type: 'text/javascript' });
+      const workerUrl = URL.createObjectURL(workerBlob);
+      const worker = new Worker(workerUrl);
+      URL.revokeObjectURL(workerUrl);
+      
+      const db = new duckdb.AsyncDuckDB(logger, worker);
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      
+      const conn = await db.connect();
+
+      if (typeof db.registerFileHandleAsync === 'function') {
+        await db.registerFileHandleAsync(selectedFile.name, selectedFile, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+      } else {
+        await db.registerFileHandle(selectedFile.name, selectedFile, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
+      }
+
+      log(`Executing query...`, 'log-info');
+      const sql = `SELECT * FROM read_parquet('${selectedFile.name}')`;
+      const result = await conn.query(sql);
+
+      globalRows = extractRowsFromResult(result);
+      recordsSizeEl.textContent = String(globalRows.length || 0);
+      
+      if (!globalRows || globalRows.length === 0) {
+        log('No rows found in this Parquet file.', 'log-error');
+      } else {
+        const first = globalRows[0];
+        if (typeof first === 'object' && !Array.isArray(first)) {
+          globalHeaders = Object.keys(first);
+        } else if (Array.isArray(first)) {
+          globalHeaders = first.map((_, i) => `col${i}`);
+        } else {
+          globalHeaders = ['col0'];
+        }
+
+        // --- Build CSV ---
+        log(`Generating CSV file...`, 'log-info');
+        const encoder = new TextEncoder();
+        const csvChunks = [];
+        const headerLine = globalHeaders.map(h => (h && h.indexOf('"') !== -1) ? `"${h.replace(/"/g,'""')}"` : (h||'')).join(',') + '\n';
+        csvChunks.push(encoder.encode(headerLine));
+
+        let processed = 0;
+        for (const r of globalRows) {
+          const cells = Array.isArray(r) ? r : globalHeaders.map(h => r[h]);
+          const escaped = cells.map((c, i) => {
+            let val = c;
+            if (typeof val === 'number' || typeof val === 'bigint') {
+              const colName = globalHeaders[i] ? globalHeaders[i].toLowerCase() : '';
+              if (colName.includes('date') || colName.includes('time')) {
+                if (val > 1000000000000) {
+                  val = new Date(Number(val)).toISOString().split('T')[0]; 
+                }
+              }
+            }
+            return csvEscape(val);
+          });
+          
+          const line = escaped.join(',') + '\n';
+          csvChunks.push(encoder.encode(line));
+
+          processed++;
+          rowsProcessedEl.textContent = String(processed);
+          // Yield to main thread every 500 rows to keep UI responsive
+          if (processed % 500 === 0) await new Promise(res => setTimeout(res, 0));
+        }
+
+        // Setup Download
+        const blob = new Blob(csvChunks, { type: 'text/csv' });
+        currentDownloadUrl = URL.createObjectURL(blob);
+        
+        downloadBtn.onclick = () => {
+          const a = document.createElement('a');
+          a.href = currentDownloadUrl;
+          a.download = selectedFile.name.replace(/\.parquet$/i, '') + '.csv';
+          a.click();
+        };
+
+        // Initialize Preview
+        currentPage = 1;
+        renderPreview();
+
+        log(`Ready! Data processed successfully.`, 'log-success');
+        previewSection.classList.remove('hidden');
+        downloadBtn.classList.remove('hidden');
+      }
+
+      try { if (conn) await conn.close(); } catch (_) {}
+      startBtn.disabled = false;
+      cancelBtn.disabled = true;
+
+    } catch (err) {
+      log('Conversion error: ' + (err?.message || String(err)), 'log-error');
+      startBtn.disabled = false;
+      cancelBtn.disabled = true;
+    }
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    log('Cancel requested.', 'log-error');
+    startBtn.disabled = false;
+    cancelBtn.disabled = true;
+  });
+
+  log('Ready. Drop a Parquet file to begin.', 'log-info');
+  </script>
+</body>
+</html>
