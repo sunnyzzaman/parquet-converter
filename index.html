@@ -25,7 +25,13 @@
     ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
     ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-    .processing-stage { font-size: 10px; color: #3b82f6; margin-top: 4px; }
+    
+    /* Terminal Styles */
+    .terminal { background: #071020; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; font-size: 13px; padding: 16px; border-radius: 8px; overflow-y: auto; height: 250px; border: 1px solid #1e293b; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }
+    .log-info { color: #94a3b8; }
+    .log-success { color: #34d399; }
+    .log-error { color: #f87171; }
+    .log-warn { color: #fbbf24; }
   </style>
 </head>
 <body class="p-4 md:p-8">
@@ -44,11 +50,11 @@
       </div>
     </div>
 
-    <div class="bg-white rounded-2xl shadow-2xl overflow-hidden">
+    <div class="bg-white rounded-2xl shadow-2xl overflow-hidden mb-6">
       <div class="p-6 md:p-8 border-b border-gray-100">
         <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-3 text-amber-800 text-sm">
           <svg class="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-          <div><strong>⚠️ Security Warning:</strong> Only convert <code>.pkl</code> / <code>.pickle</code> files from <strong>trusted sources</strong>. Unpickling can execute arbitrary code, even within the browser sandbox. Max file size: 150MB.</div>
+          <div><strong>⚠️ Security Warning:</strong> Only convert <code>.pkl</code> / <code>.pickle</code> files from <strong>trusted sources</strong>. Unpickling can execute arbitrary code. Max file size: 150MB.</div>
         </div>
 
         <div id="dropzone" class="border-2 border-dashed border-gray-300 p-8 rounded-xl text-center cursor-pointer hover:border-indigo-500 hover:bg-indigo-50 transition-all bg-gray-50">
@@ -63,7 +69,7 @@
             <svg class="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
             <div class="text-red-900">
               <h4 class="font-bold mb-1">⛔ Pickle File(s) Detected</h4>
-              <p class="text-sm mb-2">You've added pickle files. These can contain executable code. Please confirm:</p>
+              <p class="text-sm mb-2">You've added pickle files. Please confirm:</p>
               <label class="flex items-center gap-2 cursor-pointer text-sm font-semibold">
                 <input type="checkbox" id="trustCheckbox" class="w-4 h-4 rounded border-red-400">
                 <span>I understand the risks and trust the source of these files</span>
@@ -104,10 +110,18 @@
         <div id="previewContent" class="p-6 bg-gray-50"></div>
       </div>
     </div>
-    
-    <div class="mt-6 text-center text-indigo-200 text-sm">
-      <p>💡 Tip: All processing happens in your browser. Your data never leaves your device.</p>
+
+    <div class="bg-white rounded-2xl shadow-xl overflow-hidden mb-8">
+      <div class="px-6 py-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
+        <h3 class="text-sm font-bold text-gray-700 flex items-center gap-2">
+          <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M4 12a8 8 0 1116 0 8 8 0 01-16 0z"></path></svg>
+          Debug Log
+        </h3>
+        <button id="clearLogBtn" class="text-xs text-gray-500 hover:text-gray-800 font-semibold transition-colors">Clear Log</button>
+      </div>
+      <div id="terminalLog" class="terminal m-4"></div>
     </div>
+    
   </main>
 
   <script type="module">
@@ -124,6 +138,7 @@
     const previewSection = $('#previewSection'), previewTabs = $('#previewTabs'), previewContent = $('#previewContent');
     const duckStatus = $('#duckStatus'), pyStatus = $('#pyStatus');
     const pickleWarning = $('#pickleWarning'), trustCheckbox = $('#trustCheckbox');
+    const terminalLog = $('#terminalLog'), clearLogBtn = $('#clearLogBtn');
     
     // State
     let duckDBInstance = null;
@@ -133,12 +148,23 @@
     let activePreviewId = null;
     let duckDbReadyPromise = null;
 
+    // --- Logger Function (NOW WITH CONSOLE.LOG) ---
+    function addLog(message, type = 'info') {
+      const time = new Date().toLocaleTimeString();
+      const line = document.createElement('div');
+      line.className = `log-${type} mb-1`; // ✅ Uses correct class
+      line.textContent = `[${time}] ${message}`;
+      terminalLog.appendChild(line);
+      terminalLog.scrollTop = terminalLog.scrollHeight;
+      console.log(`[${type.toUpperCase()}] ${message}`); // ✅ Logs to browser console
+    }
+    clearLogBtn.addEventListener('click', () => terminalLog.innerHTML = '');
+
     // --- 1. Engine Initialization ---
     async function initDuckDB() {
       try {
-        // 👇 Change 1.2.8 back to 1.28.0 here 👇
-        const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm');
-        
+        addLog("Initializing DuckDB WebAssembly engine...", "info");
+        const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.2.8/+esm');
         const bundles = duckdb.getJsDelivrBundles();
         const bundle = await duckdb.selectBundle(bundles);
         const worker_url = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], {type: 'text/javascript'}));
@@ -151,12 +177,14 @@
         
         duckStatus.className = "inline-flex items-center gap-2 px-4 py-2 bg-emerald-900 text-emerald-300 rounded-full text-sm font-semibold border border-emerald-700";
         duckStatus.innerHTML = `✅ DuckDB Ready`;
+        addLog("DuckDB initialized successfully.", "success");
         updateUI();
         return db;
       } catch (e) {
-        console.error("DuckDB Init Failed:", e);
+        console.error(e);
         duckStatus.className = "inline-flex items-center gap-2 px-4 py-2 bg-red-900 text-red-300 rounded-full text-sm font-semibold border border-red-700";
         duckStatus.innerHTML = `❌ DuckDB Error`;
+        addLog(`DuckDB initialization failed: ${e.message}`, "error");
         throw e;
       }
     }
@@ -165,6 +193,7 @@
     async function requirePyodide() {
       if (pyodideInstance) return true;
       if (isPyodideLoading) {
+        addLog("Waiting for Pyodide to finish loading...", "info");
         while(isPyodideLoading) await new Promise(r => setTimeout(r, 200));
         return !!pyodideInstance;
       }
@@ -172,17 +201,21 @@
       isPyodideLoading = true;
       pyStatus.className = "inline-flex items-center gap-2 px-4 py-2 bg-yellow-900 text-yellow-300 rounded-full text-sm font-semibold border border-yellow-700";
       pyStatus.innerHTML = `<svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Downloading Python Engine...`;
-      
+      addLog("Downloading Pyodide (Python WASM) engine (~25MB)...", "warn");
+
       try {
         const pyodide = await loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.3/full/' });
+        addLog("Pyodide core loaded. Installing pandas...", "info");
         await pyodide.loadPackage(['pandas']);
         pyodideInstance = pyodide;
         pyStatus.className = "inline-flex items-center gap-2 px-4 py-2 bg-emerald-900 text-emerald-300 rounded-full text-sm font-semibold border border-emerald-700";
         pyStatus.innerHTML = `✅ Python Ready`;
+        addLog("Python Engine (Pyodide + Pandas) ready.", "success");
       } catch (err) {
         console.error(err);
         pyStatus.className = "inline-flex items-center gap-2 px-4 py-2 bg-red-900 text-red-300 rounded-full text-sm font-semibold border border-red-700";
         pyStatus.innerHTML = `❌ Python Error`;
+        addLog(`Pyodide load failed: ${err.message}`, "error");
       } finally {
         isPyodideLoading = false;
       }
@@ -200,16 +233,20 @@
       if (!files.length) return;
       Array.from(files).forEach(file => {
         const ext = file.name.split('.').pop().toLowerCase();
-        if (!['parquet', 'pkl', 'pickle'].includes(ext)) return;
+        if (!['parquet', 'pkl', 'pickle'].includes(ext)) {
+            addLog(`Ignored ${file.name} (unsupported format).`, "warn");
+            return;
+        }
         
-        // 150MB File Size Limit Check
         if (file.size > MAX_FILE_SIZE) {
+          addLog(`Ignored ${file.name} (exceeds 150MB limit).`, "error");
           alert(`File "${file.name}" is too large (${humanFileSize(file.size)}). Max allowed is 150MB.`);
           return;
         }
 
         const id = 'f_' + Math.random().toString(36).substr(2, 9);
         filesMap.set(id, { id, file, ext, status: 'pending', csvBlob: null, preview: null, rows: 0, error: null });
+        addLog(`Added ${file.name} to queue.`, "info");
       });
       fileInput.value = ''; 
       updateUI();
@@ -236,14 +273,9 @@
       queueSection.classList.toggle('hidden', files.length === 0);
       queueCount.textContent = files.length;
       
-      // Manage Pickle Warning Display
-      if (hasPickle && hasPending) {
-        pickleWarning.classList.remove('hidden');
-      } else {
-        pickleWarning.classList.add('hidden');
-      }
+      if (hasPickle && hasPending) { pickleWarning.classList.remove('hidden'); } 
+      else { pickleWarning.classList.add('hidden'); }
       
-      // Enable convert button ONLY if there are pending files AND (if pickles exist, trust box is checked)
       const canConvertPickles = !hasPickle || trustCheckbox.checked;
       convertAllBtn.disabled = !hasPending || !canConvertPickles;
       
@@ -285,6 +317,7 @@
             activePreviewId = null;
             previewSection.classList.add('hidden');
         }
+        addLog(`Removed ${f?.file?.name || 'file'} from queue.`, "info");
         updateUI();
     };
 
@@ -294,26 +327,23 @@
       activePreviewId = null;
       previewSection.classList.add('hidden');
       trustCheckbox.checked = false;
+      addLog("Cleared all files from memory.", "warn");
       updateUI();
     });
 
-    // --- 4. Core Conversion Logic (Hybrid) ---
+    // --- 4. Core Conversion Logic ---
     convertAllBtn.addEventListener('click', async () => {
       const files = Array.from(filesMap.values()).filter(f => f.status === 'pending');
-      
-      const hasPickle = files.some(f => ['pkl', 'pickle'].includes(f.ext));
-      if (hasPickle && !trustCheckbox.checked) {
-          alert("Please confirm you trust the source of these Pickle files by checking the box.");
-          return;
-      }
-      
       convertAllBtn.disabled = true;
+
       const hasParquet = files.some(f => f.ext === 'parquet');
       if (hasParquet && !duckDBInstance) {
         convertAllBtn.innerHTML = "⏳ Loading DuckDB...";
+        addLog("Waiting for DuckDB to initialize...", "info");
         try { 
             await duckDbReadyPromise; 
         } catch (e) { 
+            addLog("Aborting conversion: DuckDB failed to load.", "error");
             alert('Failed to load DuckDB'); 
             convertAllBtn.innerHTML = "🚀 Convert All Files";
             convertAllBtn.disabled = false;
@@ -321,10 +351,12 @@
         }
       }
 
+      const hasPickle = files.some(f => ['pkl', 'pickle'].includes(f.ext));
       if (hasPickle) {
         convertAllBtn.innerHTML = "⏳ Loading Python Engine...";
         const ok = await requirePyodide();
         if (!ok) {
+           addLog("Aborting conversion: Python failed to load.", "error");
            alert("Failed to load Python engine required for Pickle files.");
            convertAllBtn.innerHTML = "🚀 Convert All Files";
            convertAllBtn.disabled = false;
@@ -347,55 +379,79 @@
         } catch (err) {
           f.status = 'error';
           f.error = err.message || String(err);
+          addLog(`[${f.file.name}] Conversion failed: ${f.error}`, "error");
           console.error(`Error on ${f.file.name}:`, err);
         }
         updateUI();
       }
       convertAllBtn.innerHTML = "🚀 Convert All Files";
+      addLog("Batch processing complete.", "success");
     });
 
     async function processWithDuckDB(f) {
+      addLog(`[${f.file.name}] Starting DuckDB conversion...`, "info");
       const alias = `${f.id}_${f.file.name.replace(/[^A-Za-z0-9_.-]/g, '_')}`;
-      if (typeof duckDBInstance.registerFileHandleAsync === 'function') {
-        await duckDBInstance.registerFileHandleAsync(alias, f.file, BROWSER_FILEREADER, true); 
-      } else {
-        duckDBInstance.registerFileHandle(alias, f.file, BROWSER_FILEREADER, true);
-      }
-      
-      const conn = await duckDBInstance.connect();
-      const outName = `out_${f.id}.csv`;
       
       try {
-        const countRes = await conn.query(`SELECT COUNT(*) as c FROM read_parquet('${alias}')`);
-        const first = countRes.toArray()[0];
-        f.rows = Number(first.c ?? (first.toJSON ? first.toJSON().c : 0));
+        addLog(`[${f.file.name}] Registering file handle...`, "info");
+        if (typeof duckDBInstance.registerFileHandleAsync === 'function') {
+          await duckDBInstance.registerFileHandleAsync(alias, f.file, BROWSER_FILEREADER, true); 
+        } else {
+          duckDBInstance.registerFileHandle(alias, f.file, BROWSER_FILEREADER, true);
+        }
+        
+        addLog(`[${f.file.name}] Connecting to DB instance...`, "info");
+        const conn = await duckDBInstance.connect();
+        const outName = `out_${f.id}.csv`;
+        
+        try {
+          addLog(`[${f.file.name}] Executing read_parquet query...`, "info");
+          
+          const countRes = await conn.query(`SELECT COUNT(*) as c FROM read_parquet('${alias}')`);
+          const first = countRes.toArray()[0];
+          f.rows = Number(first.c ?? (first.toJSON ? first.toJSON().c : 0));
+          addLog(`[${f.file.name}] Detected ${f.rows} rows. Generating preview...`, "info");
 
-        const previewRes = await conn.query(`SELECT * FROM read_parquet('${alias}') LIMIT 100`);
-        const rowsArr = previewRes.toArray().map(r => (typeof r.toJSON === 'function' ? r.toJSON() : r));
-        const headers = rowsArr.length ? Object.keys(rowsArr[0]) : [];
-        const previewRows = rowsArr.map(row => headers.map(h => typeof row[h] === 'bigint' ? row[h].toString() : row[h]));
-        f.preview = { headers, rows: previewRows };
+          const previewRes = await conn.query(`SELECT * FROM read_parquet('${alias}') LIMIT 100`);
+          const rowsArr = previewRes.toArray().map(r => (typeof r.toJSON === 'function' ? r.toJSON() : r));
+          const headers = rowsArr.length ? Object.keys(rowsArr[0]) : [];
+          const previewRows = rowsArr.map(row => headers.map(h => typeof row[h] === 'bigint' ? row[h].toString() : row[h]));
+          f.preview = { headers, rows: previewRows };
 
-        await conn.query(`COPY (SELECT * FROM read_parquet('${alias}')) TO '${outName}' (HEADER, DELIMITER ',');`);
-        const csvBytes = await duckDBInstance.copyFileToBuffer(outName);
-        const blob = new Blob([csvBytes], { type: 'text/csv' });
-        f.csvBlob = URL.createObjectURL(blob);
-        f.status = 'success';
-      } finally {
-        try { await conn.close(); } catch (_) {}
-        try { if (duckDBInstance.dropFile) await duckDBInstance.dropFile(outName); } catch (_) {}
-        try { if (duckDBInstance.dropFile) await duckDBInstance.dropFile(alias); } catch (_) {}
+          addLog(`[${f.file.name}] Copying to CSV output buffer...`, "info");
+          await conn.query(`COPY (SELECT * FROM read_parquet('${alias}')) TO '${outName}' (HEADER, DELIMITER ',');`);
+          
+          addLog(`[${f.file.name}] Extracting Blob from buffer...`, "info");
+          const csvBytes = await duckDBInstance.copyFileToBuffer(outName);
+          const blob = new Blob([csvBytes], { type: 'text/csv' });
+          f.csvBlob = URL.createObjectURL(blob);
+          f.status = 'success';
+          addLog(`[${f.file.name}] Successfully converted!`, "success");
+
+        } finally {
+          addLog(`[${f.file.name}] Cleaning up connection...`, "info");
+          try { await conn.close(); } catch (_) {}
+          try { if (duckDBInstance.dropFile) await duckDBInstance.dropFile(outName); } catch (_) {}
+          try { if (duckDBInstance.dropFile) await duckDBInstance.dropFile(alias); } catch (_) {}
+        }
+      } catch (err) {
+         addLog(`[${f.file.name}] Fatal DuckDB Error: ${err.message}`, "error");
+         throw err;
       }
     }
 
     async function processWithPyodide(f) {
+      addLog(`[${f.file.name}] Starting Pyodide conversion...`, "info");
       const arrayBuffer = await f.file.arrayBuffer();
       const virtPath = `/tmp_${f.id}.${f.ext}`;
+      
+      addLog(`[${f.file.name}] Writing to virtual file system...`, "info");
       pyodideInstance.FS.writeFile(virtPath, new Uint8Array(arrayBuffer));
 
       const pyCode = `
 import pandas as pd
 import json
+import traceback
 
 try:
     filepath = r'${virtPath}'
@@ -422,17 +478,28 @@ try:
         'rows': int(df.shape[0]),
     }
 except Exception as e:
-    result = {'success': False, 'error': str(e)}
+    err_msg = str(e)
+    # Give a smart error if it's a C-library failure (like hmmlearn)
+    if "No module named" in err_msg:
+        err_msg += " (Note: Browser-based Python cannot load packages with C-extensions that aren't pre-compiled for Pyodide, like hmmlearn or scikit-learn.)"
+    result = {'success': False, 'error': err_msg}
 
 json.dumps(result)
       `;
 
+      addLog(`[${f.file.name}] Running python Pandas script...`, "info");
       const resultStr = await pyodideInstance.runPythonAsync(pyCode);
       const result = JSON.parse(resultStr);
+      
+      addLog(`[${f.file.name}] Cleaning up virtual file system...`, "info");
       pyodideInstance.FS.unlink(virtPath); 
 
-      if (!result.success) throw new Error(result.error);
+      if (!result.success) {
+        addLog(`[${f.file.name}] Python Script Error. See logs.`, "error");
+        throw new Error(result.error);
+      }
 
+      addLog(`[${f.file.name}] Extracting CSV Blob...`, "info");
       const csvBytes = pyodideInstance.FS.readFile(`/out_${f.id}.csv`);
       const blob = new Blob([csvBytes], { type: 'text/csv' });
       f.csvBlob = URL.createObjectURL(blob);
@@ -441,6 +508,7 @@ json.dumps(result)
       f.preview = result.preview;
       f.rows = result.rows;
       f.status = 'success';
+      addLog(`[${f.file.name}] Successfully converted!`, "success");
     }
 
     // --- 5. Preview & Downloads ---
@@ -451,6 +519,7 @@ json.dumps(result)
       a.href = f.csvBlob;
       a.download = f.file.name.replace(/\.(parquet|pkl|pickle)$/i, '') + '.csv';
       a.click();
+      addLog(`Triggered download for ${f.file.name}`, "info");
     };
 
     window.showPreview = (id) => {
@@ -493,6 +562,7 @@ json.dumps(result)
 
       downloadZipBtn.disabled = true;
       downloadZipBtn.innerHTML = "📦 Zipping...";
+      addLog("Starting batch ZIP creation...", "info");
 
       try {
         const zip = new JSZip();
@@ -510,8 +580,10 @@ json.dumps(result)
         a.download = "converted_datasets.zip";
         a.click();
         URL.revokeObjectURL(url);
+        addLog("Batch ZIP downloaded successfully.", "success");
       } catch (err) {
         console.error("ZIP creation failed", err);
+        addLog(`ZIP creation failed: ${err.message}`, "error");
         alert("Failed to create ZIP file.");
       } finally {
         downloadZipBtn.disabled = false;
