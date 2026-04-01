@@ -136,8 +136,9 @@
     // --- 1. Engine Initialization ---
     async function initDuckDB() {
       try {
-        // Fixed DuckDB version typo (1.28.0 -> 1.2.8)
-        const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.2.8/+esm');
+        // 👇 Change 1.2.8 back to 1.28.0 here 👇
+        const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm');
+        
         const bundles = duckdb.getJsDelivrBundles();
         const bundle = await duckdb.selectBundle(bundles);
         const worker_url = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], {type: 'text/javascript'}));
