@@ -164,7 +164,7 @@
     async function initDuckDB() {
       try {
         addLog("Initializing DuckDB WebAssembly engine...", "info");
-        const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.2.8/+esm');
+        const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm');
         const bundles = duckdb.getJsDelivrBundles();
         const bundle = await duckdb.selectBundle(bundles);
         const worker_url = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], {type: 'text/javascript'}));
