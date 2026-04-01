@@ -393,12 +393,10 @@
       const alias = `${f.id}_${f.file.name.replace(/[^A-Za-z0-9_.-]/g, '_')}`;
       
       try {
-        addLog(`[${f.file.name}] Registering file handle...`, "info");
-        if (typeof duckDBInstance.registerFileHandleAsync === 'function') {
-          await duckDBInstance.registerFileHandleAsync(alias, f.file, BROWSER_FILEREADER, true); 
-        } else {
-          duckDBInstance.registerFileHandle(alias, f.file, BROWSER_FILEREADER, true);
-        }
+        addLog(`[${f.file.name}] Loading file into WebAssembly memory...`, "info");
+        // FIX: We load the file directly into a buffer to prevent Web Worker deadlocks
+        const arrayBuffer = await f.file.arrayBuffer();
+        await duckDBInstance.registerFileBuffer(alias, new Uint8Array(arrayBuffer));
         
         addLog(`[${f.file.name}] Connecting to DB instance...`, "info");
         const conn = await duckDBInstance.connect();
